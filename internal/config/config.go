@@ -157,6 +157,9 @@ type City struct {
 // template. Unlike Agent, it does not carry behavior itself; it only
 // declares runtime identity and controller policy.
 type NamedSession struct {
+	// Name is the configured public session identity. When omitted, Template
+	// remains the compatibility identity.
+	Name string `toml:"name,omitempty"`
 	// Template is the referenced agent template name.
 	Template string `toml:"template" jsonschema:"required"`
 	// Scope defines where this named session is instantiated in pack
@@ -182,6 +185,28 @@ func (s *NamedSession) QualifiedName() string {
 		if s == nil {
 			return ""
 		}
+		return s.IdentityName()
+	}
+	return s.Dir + "/" + s.IdentityName()
+}
+
+// IdentityName returns the unqualified configured public session identity.
+func (s *NamedSession) IdentityName() string {
+	if s == nil {
+		return ""
+	}
+	if s.Name != "" {
+		return s.Name
+	}
+	return s.Template
+}
+
+// TemplateQualifiedName returns the canonical backing agent config identity.
+func (s *NamedSession) TemplateQualifiedName() string {
+	if s == nil {
+		return ""
+	}
+	if s.Dir == "" {
 		return s.Template
 	}
 	return s.Dir + "/" + s.Template
@@ -1372,6 +1397,10 @@ func (a *Agent) EffectiveWorkQuery() string {
 		target = a.PoolName
 	}
 	return `sh -c '` +
+		`case "$GC_SESSION_ORIGIN" in ` +
+		`ephemeral|"") ;; ` +
+		`*) exit 0 ;; ` +
+		`esac; ` +
 		// Tier 1: in_progress assigned to any of my identifiers (crash recovery)
 		`for id in "$GC_SESSION_ID" "$GC_SESSION_NAME" "$GC_ALIAS"; do ` +
 		`[ -z "$id" ] && continue; ` +
@@ -1485,10 +1514,7 @@ func (a *Agent) EffectiveOnDeath() string {
 	if a.OnDeath != "" {
 		return a.OnDeath
 	}
-	return `bd list --assignee=` + a.QualifiedName() +
-		` --status=in_progress --json 2>/dev/null | ` +
-		`jq -r '.[].id' 2>/dev/null | ` +
-		`xargs -rI{} bd update {} --unclaim 2>/dev/null`
+	return ""
 }
 
 // EffectiveOnBoot returns the on_boot command for this agent.
@@ -1498,14 +1524,7 @@ func (a *Agent) EffectiveOnBoot() string {
 	if a.OnBoot != "" {
 		return a.OnBoot
 	}
-	template := a.QualifiedName()
-	if a.PoolName != "" {
-		template = a.PoolName
-	}
-	return `bd list --metadata-field gc.routed_to=` + template +
-		` --status=in_progress --json 2>/dev/null | ` +
-		`jq -r '.[].id' 2>/dev/null | ` +
-		`xargs -rI{} bd update {} --unclaim 2>/dev/null`
+	return ""
 }
 
 // InjectImplicitAgents adds on-demand agents for each configured provider at
@@ -1775,13 +1794,18 @@ func ValidateAgents(agents []Agent) error {
 	return nil
 }
 
-// ValidateNamedSessions checks named session declarations for structural
-// errors and cross-references against the expanded agent set.
 func ValidateNamedSessions(cfg *City) error {
+	return validateNamedSessions(cfg, true)
+}
+
+// validateNamedSessions checks named session declarations for structural
+// errors. When requireBackingTemplate is true, it also requires every named
+// session to resolve to an expanded backing agent template.
+func validateNamedSessions(cfg *City, requireBackingTemplate bool) error {
 	if cfg == nil || len(cfg.NamedSessions) == 0 {
 		return nil
 	}
-	type sessionKey struct{ dir, template string }
+	type sessionKey struct{ dir, identity string }
 	seen := make(map[sessionKey]bool, len(cfg.NamedSessions))
 	reservedAliases := make(map[string]string, len(cfg.NamedSessions))
 	reservedSessionNames := make(map[string]string, len(cfg.NamedSessions))
@@ -1789,6 +1813,7 @@ func ValidateNamedSessions(cfg *City) error {
 	for i := range cfg.Agents {
 		agentsByTemplate[cfg.Agents[i].QualifiedName()] = &cfg.Agents[i]
 	}
+	alwaysByTemplate := make(map[string]int)
 	for i := range cfg.NamedSessions {
 		s := &cfg.NamedSessions[i]
 		if s.Template == "" {
@@ -1796,6 +1821,9 @@ func ValidateNamedSessions(cfg *City) error {
 		}
 		if !validAgentName.MatchString(s.Template) {
 			return fmt.Errorf("named_session[%d]: template %q must match [a-zA-Z0-9][a-zA-Z0-9_-]*", i, s.Template)
+		}
+		if s.Name != "" && !validAgentName.MatchString(s.Name) {
+			return fmt.Errorf("named_session[%d]: name %q must match [a-zA-Z0-9][a-zA-Z0-9_-]*", i, s.Name)
 		}
 		switch s.Scope {
 		case "", "city", "rig":
@@ -1809,14 +1837,16 @@ func ValidateNamedSessions(cfg *City) error {
 		default:
 			return fmt.Errorf("named_session %q: mode must be \"on_demand\", \"always\", or empty, got %q", s.QualifiedName(), s.Mode)
 		}
-		key := sessionKey{dir: s.Dir, template: s.Template}
+		key := sessionKey{dir: s.Dir, identity: s.IdentityName()}
 		if seen[key] {
 			return fmt.Errorf("named_session %q: duplicate identity", s.QualifiedName())
 		}
 		seen[key] = true
-		agent := agentsByTemplate[s.QualifiedName()]
+		agent := agentsByTemplate[s.TemplateQualifiedName()]
 		if agent == nil {
-			return fmt.Errorf("named_session %q: referenced template not found after pack expansion", s.QualifiedName())
+			if requireBackingTemplate {
+				return fmt.Errorf("named_session %q: referenced template not found after pack expansion", s.QualifiedName())
+			}
 		}
 		identity := s.QualifiedName()
 		sessionName := NamedSessionRuntimeName(cfg.EffectiveCityName(), cfg.Workspace, identity)
@@ -1840,7 +1870,14 @@ func ValidateNamedSessions(cfg *City) error {
 		}
 		reservedAliases[identity] = identity
 		reservedSessionNames[sessionName] = identity
-		if s.ModeOrDefault() == "always" {
+		if s.ModeOrDefault() == "always" && agent != nil {
+			alwaysByTemplate[agent.QualifiedName()]++
+			if max := agent.EffectiveMaxActiveSessions(); max != nil && *max < alwaysByTemplate[agent.QualifiedName()] {
+				return fmt.Errorf(
+					"named_session %q: mode %q exceeds max_active_sessions capacity %d on template %q",
+					s.QualifiedName(), s.ModeOrDefault(), *max, agent.QualifiedName(),
+				)
+			}
 			policy := ResolveSessionSleepPolicy(cfg, agent)
 			if normalized := NormalizeSleepAfterIdle(policy.Value); normalized != "" && normalized != SessionSleepOff {
 				return fmt.Errorf(
@@ -2041,6 +2078,12 @@ func Load(fs fsys.FS, path string) (*City, error) {
 		return nil, err
 	}
 	cfg.ResolvedWorkspaceName = filepath.Base(filepath.Dir(path))
+	// Load intentionally skips include and pack expansion, so validate the
+	// direct named-session declarations without requiring pack-provided
+	// backing templates to be present yet.
+	if err := validateNamedSessions(cfg, false); err != nil {
+		return nil, err
+	}
 	return cfg, nil
 }
 

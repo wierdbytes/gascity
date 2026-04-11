@@ -1508,8 +1508,9 @@ func (a *Agent) ResolvedMaxActiveSessions(cfg *City) *int {
 }
 
 // EffectiveOnDeath returns the on_death command for this agent.
-// If OnDeath is set, returns it. Otherwise returns a default that
-// unclaims in_progress beads assigned to this agent.
+// If OnDeath is set, returns it. Otherwise returns an empty command; session
+// ownership recovery is diagnosed by session-model doctor checks instead of
+// implicit lifecycle unclaim hooks.
 func (a *Agent) EffectiveOnDeath() string {
 	if a.OnDeath != "" {
 		return a.OnDeath
@@ -1518,8 +1519,9 @@ func (a *Agent) EffectiveOnDeath() string {
 }
 
 // EffectiveOnBoot returns the on_boot command for this agent.
-// If OnBoot is set, returns it. Otherwise returns a default that
-// unclaims all in_progress beads routed to this agent's template.
+// If OnBoot is set, returns it. Otherwise returns an empty command; session
+// ownership recovery is diagnosed by session-model doctor checks instead of
+// implicit lifecycle unclaim hooks.
 func (a *Agent) EffectiveOnBoot() string {
 	if a.OnBoot != "" {
 		return a.OnBoot

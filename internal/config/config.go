@@ -1397,10 +1397,6 @@ func (a *Agent) EffectiveWorkQuery() string {
 		target = a.PoolName
 	}
 	return `sh -c '` +
-		`case "$GC_SESSION_ORIGIN" in ` +
-		`ephemeral|"") ;; ` +
-		`*) exit 0 ;; ` +
-		`esac; ` +
 		// Tier 1: in_progress assigned to any of my identifiers (crash recovery)
 		`for id in "$GC_SESSION_ID" "$GC_SESSION_NAME" "$GC_ALIAS"; do ` +
 		`[ -z "$id" ] && continue; ` +
@@ -1414,6 +1410,10 @@ func (a *Agent) EffectiveWorkQuery() string {
 		`[ -n "$r" ] && [ "$r" != "[]" ] && printf "%s" "$r" && exit 0; ` +
 		`done; ` +
 		// Tier 3: ready unassigned routed to this agent (pool queue)
+		`case "$GC_SESSION_ORIGIN" in ` +
+		`ephemeral|"") ;; ` +
+		`*) exit 0 ;; ` +
+		`esac; ` +
 		`bd ready --metadata-field gc.routed_to=` + target +
 		` --unassigned --json --limit=1 2>/dev/null'`
 }

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/gastownhall/gascity/internal/beads"
+	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/formula"
 	"github.com/gastownhall/gascity/internal/session"
 )
@@ -773,6 +774,41 @@ func TestSpawnNextAttemptPreservesDirectSessionAssigneeAsBeadID(t *testing.T) {
 	}
 	if got := child.Metadata["gc.execution_routed_to"]; got != "" {
 		t.Fatalf("review-direct gc.execution_routed_to = %q, want empty for direct session delivery", got)
+	}
+}
+
+func TestResolveAttemptRouteBinding_ConfigTargetBeatsCollidingSessionAlias(t *testing.T) {
+	t.Parallel()
+
+	store := beads.NewMemStore()
+	if _, err := store.Create(beads.Bead{
+		Title:  "colliding session",
+		Type:   session.BeadType,
+		Labels: []string{session.LabelSession},
+		Metadata: map[string]string{
+			"alias":        "gascity/claude",
+			"session_name": "s-gc-colliding",
+		},
+	}); err != nil {
+		t.Fatalf("create colliding session: %v", err)
+	}
+	cfg := &config.City{
+		Workspace: config.Workspace{Name: "test-city"},
+		Agents: []config.Agent{{
+			Name: "claude",
+			Dir:  "gascity",
+		}},
+	}
+
+	binding, ok := resolveAttemptRouteBinding("gascity/claude", cfg, store)
+	if !ok {
+		t.Fatal("resolveAttemptRouteBinding did not resolve config target")
+	}
+	if binding.directSessionID != "" {
+		t.Fatalf("directSessionID = %q, want empty so config route is not hijacked by alias", binding.directSessionID)
+	}
+	if binding.qualifiedName != "gascity/claude" || !binding.metadataOnly {
+		t.Fatalf("binding = %+v, want metadata-only gascity/claude config route", binding)
 	}
 }
 

@@ -90,6 +90,7 @@ var (
 )
 
 const providerProbeCacheTTL = 2 * time.Second
+const providerProbeCLITimeout = 5 * time.Second
 
 type providerReadinessResponse struct {
 	Providers map[string]providerReadiness `json:"providers"`
@@ -555,7 +556,7 @@ func probeGitHubCLIAuthStatus(ctx context.Context, homeDir, ghPath string) provi
 	stdout, stderr, err := runProbeCommand(
 		ctx,
 		homeDir,
-		2*time.Second,
+		providerProbeCLITimeout,
 		ghPath,
 		"auth",
 		"status",

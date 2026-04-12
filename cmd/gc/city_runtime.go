@@ -888,7 +888,7 @@ func sweepUndesiredPoolSessionBeads(
 		if _, desired := desiredState[bead.Metadata["session_name"]]; desired {
 			continue
 		}
-		if bead.Metadata["manual_session"] == boolMetadata(true) || isNamedSessionBead(bead) {
+		if isManualSessionBead(bead) || isNamedSessionBead(bead) {
 			continue
 		}
 		if sp != nil && sp.IsRunning(bead.Metadata["session_name"]) {
